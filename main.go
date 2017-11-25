@@ -3,6 +3,7 @@ package main // import "github.com/mojlighetsministeriet/random-background"
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"image"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthonynsimon/bild/blur"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 	lru "github.com/hashicorp/golang-lru"
@@ -22,6 +24,7 @@ import (
 	"github.com/mojlighetsministeriet/utils/httprequest"
 )
 
+const imageQuality = 85
 const instagramTagPageURL = "https://www.instagram.com/explore/tags/landskap/"
 const instagramDataRegexp = "window\\._sharedData\\s*=\\s*([^;]+)"
 
@@ -81,7 +84,7 @@ func (sizes *imageSizes) Largest() (largest imageSize) {
 	return
 }
 
-type instagramResponse struct {
+type instagramTagPageData struct {
 	EntryData instagramEntryData `json:"entry_data"`
 }
 
@@ -109,8 +112,6 @@ type instagramNode struct {
 
 var imageURLs []string
 var imageCache *lru.ARCCache
-var jsonHTTPClient httprequest.JSONClient
-var httpClient httprequest.Client
 
 func getCroppingRectangleForAspectRatio(size imageSize, newAspectRatio float64) image.Rectangle {
 	aspectRatio := float64(size.Width) / float64(size.Height)
@@ -135,8 +136,13 @@ func getCroppingRectangleForAspectRatio(size imageSize, newAspectRatio float64) 
 	return croppingRectangle
 }
 
+func bytesToImage(input []byte) (output image.Image, err error) {
+	output, _, err = image.Decode(bytes.NewReader(input))
+	return
+}
+
 func resizeAndCropImage(imageData []byte, size imageSize) (resizedImage []byte, err error) {
-	originalImage, _, err := image.Decode(bytes.NewReader(imageData))
+	originalImage, err := bytesToImage(imageData)
 	if err != nil {
 		return
 	}
@@ -151,7 +157,7 @@ func resizeAndCropImage(imageData []byte, size imageSize) (resizedImage []byte, 
 
 	var buffer bytes.Buffer
 	writer := bufio.NewWriter(&buffer)
-	err = imgio.JPEGEncoder(75)(writer, result)
+	err = imgio.JPEGEncoder(imageQuality)(writer, result)
 	if err != nil {
 		return
 	}
@@ -161,7 +167,49 @@ func resizeAndCropImage(imageData []byte, size imageSize) (resizedImage []byte, 
 	return
 }
 
-func getImage(url string, size imageSize, sizes imageSizes) (imageResult []byte, err error) {
+func getOriginalImage(url string, cache *lru.ARCCache) (imageResult []byte, err error) {
+	originalImageCacheKey := url + "|original"
+	cachedOriginalImage, found := imageCache.Get(originalImageCacheKey)
+	if found == true {
+		imageResult = cachedOriginalImage.([]byte)
+		return
+	}
+
+	httpClient, clientError := httprequest.NewClient()
+	if clientError != nil {
+		err = clientError
+		return
+	}
+
+	originalImageData, imageGetError := httpClient.Get(url)
+	if imageGetError != nil {
+		err = imageGetError
+		return
+	}
+
+	buffer := new(bytes.Buffer)
+	buffer.ReadFrom(originalImageData)
+	originalImage, toImageError := bytesToImage(buffer.Bytes())
+	if toImageError != nil {
+		err = toImageError
+		return
+	}
+
+	originalImage = blur.Gaussian(originalImage, 30)
+
+	buffer = new(bytes.Buffer)
+	writer := bufio.NewWriter(buffer)
+	err = imgio.JPEGEncoder(100)(writer, originalImage)
+	if err != nil {
+		return
+	}
+
+	imageCache.Add(originalImageCacheKey, buffer.Bytes())
+
+	return
+}
+
+func getImage(url string, size imageSize, cache *lru.ARCCache) (imageResult []byte, err error) {
 	cacheKey := url + "|" + size.String()
 
 	cachedImage, found := imageCache.Get(cacheKey)
@@ -170,33 +218,13 @@ func getImage(url string, size imageSize, sizes imageSizes) (imageResult []byte,
 		return
 	}
 
-	var largestImage []byte
-	largestSize := sizes.Largest()
-	largestImageCacheKey := url + "|" + largestSize.Name
-	cachedLargestImage, found := imageCache.Get(largestImageCacheKey)
-	if found == true {
-		largestImage = cachedLargestImage.([]byte)
-	} else {
-		originalImage, imageGetError := httpClient.Get(url)
-		if imageGetError != nil {
-			err = imageGetError
-			return
-		}
-
-		buffer := new(bytes.Buffer)
-		buffer.ReadFrom(originalImage)
-		resizedImage, resizeError := resizeAndCropImage(buffer.Bytes(), largestSize)
-		if resizeError != nil {
-			err = resizeError
-			return
-		}
-
-		largestImage = resizedImage
-
-		imageCache.Add(largestImageCacheKey, largestImage)
+	originalImage, originalImageError := getOriginalImage(url, cache)
+	if originalImageError != nil {
+		err = originalImageError
+		return
 	}
 
-	imageResult, resizeError := resizeAndCropImage(largestImage, size)
+	imageResult, resizeError := resizeAndCropImage(originalImage, size)
 	if resizeError != nil {
 		err = resizeError
 		return
@@ -233,7 +261,7 @@ func sendImage(context echo.Context) error {
 
 	rand.Seed(time.Now().Unix())
 	imageURLIndex := rand.Int() % len(imageURLs)
-	image, imageError := getImage(imageURLs[imageURLIndex], size, sizes)
+	image, imageError := getImage(imageURLs[imageURLIndex], size, imageCache)
 	if imageError != nil {
 		context.Logger().Error(imageError)
 		return context.String(http.StatusServiceUnavailable, "Unable to return an image at this moment, try again in a bit")
@@ -246,7 +274,7 @@ func resizeLargestWorker(jobs <-chan string, sizes imageSizes) {
 	largest := sizes.Largest()
 
 	for url := range jobs {
-		getImage(url, largest, sizes)
+		getImage(url, largest, imageCache)
 		time.Sleep(5 * time.Second)
 	}
 }
@@ -269,13 +297,6 @@ func main() {
 	service.Use(middleware.Gzip())
 	service.Logger.SetLevel(log.INFO)
 
-	wikimediaFilePageOriginalImageURLPattern := regexp.MustCompile("fullMedia.+?href=\"([^\"]+)")
-
-	jsonHTTPClient, err := httprequest.NewJSONClient()
-	if err != nil {
-		panic(err)
-	}
-
 	httpClient, err := httprequest.NewClient()
 	if err != nil {
 		panic(err)
@@ -287,37 +308,38 @@ func main() {
 	}
 
 	allowedImageExtensions := regexp.MustCompile("(?i)\\.(je?pg|png)$")
+	instagramDataPattern := regexp.MustCompile(instagramDataRegexp)
 
 	go func() {
 		for {
 			var newImageURLs []string
-			wikimediaReponse := wikimediaSearchResponse{}
-			wikimediaError := jsonHTTPClient.Get(wikimediaSearchURL, &wikimediaReponse)
-			if wikimediaError != nil {
-				service.Logger.Error(wikimediaError)
+
+			response, fetchError := httpClient.Get(instagramTagPageURL)
+			if fetchError != nil {
+				service.Logger.Error(fetchError)
 				continue
 			}
 
-			for _, page := range wikimediaReponse.Query.Pages {
-				for _, image := range page.Images {
-					url := wikimediaFileRootURL + image.Title
-					filePageBody, filePageError := httpClient.Get(url)
-					if filePageError != nil {
-						service.Logger.Error(filePageError)
-						continue
-					}
+			buffer := new(bytes.Buffer)
+			buffer.ReadFrom(response)
+			matches := instagramDataPattern.FindStringSubmatch(buffer.String())
+			if matches == nil {
+				service.Logger.Error(errors.New("Unable to find data for images from tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
+				continue
+			}
 
-					buffer := new(bytes.Buffer)
-					buffer.ReadFrom(filePageBody)
-					matches := wikimediaFilePageOriginalImageURLPattern.FindStringSubmatch(buffer.String())
-					if matches == nil {
-						service.Logger.Error(errors.New("Unable to find original image on " + url + ", has mediawiki changed their HTML structure?"))
-						continue
-					}
+			instagramData := instagramTagPageData{}
+			insagramDataError := json.Unmarshal([]byte(matches[1]), &instagramData)
+			if insagramDataError != nil {
+				service.Logger.Error(errors.New("Unable to parse data from instagram tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
+				service.Logger.Error(insagramDataError)
+				continue
+			}
 
-					imageURL := matches[1]
-					if allowedImageExtensions.Match([]byte(imageURL)) {
-						newImageURLs = append(newImageURLs, imageURL)
+			for _, page := range instagramData.EntryData.TagPage {
+				for _, node := range page.Tag.TopPosts.Nodes {
+					if node.IsVideo == false && allowedImageExtensions.Match([]byte(node.DisplaySrc)) {
+						newImageURLs = append(newImageURLs, node.DisplaySrc)
 					}
 				}
 			}
@@ -326,7 +348,7 @@ func main() {
 
 			preCacheLargestImages(imageURLs)
 
-			time.Sleep(24 * time.Hour)
+			time.Sleep(time.Hour)
 		}
 	}()
 
