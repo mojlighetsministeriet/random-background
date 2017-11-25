@@ -1,10 +1,9 @@
-package main // import "github.com/mojlighetsministeriet/random-backgound"
+package main // import "github.com/mojlighetsministeriet/random-background"
 
 import (
 	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"image"
 	"math/rand"
 	"net/http"
@@ -23,7 +22,7 @@ import (
 	"github.com/mojlighetsministeriet/utils/httprequest"
 )
 
-const wikimediaSearchURL = "https://en.wikipedia.org/w/api.php?action=query&titles=Landscape&prop=images&imlimit=2&format=json"
+const wikimediaSearchURL = "https://en.wikipedia.org/w/api.php?action=query&titles=Landscape&prop=images&imlimit=50&format=json"
 const wikimediaFileRootURL = "https://commons.wikimedia.org/wiki/"
 
 type imageSize struct {
@@ -107,20 +106,22 @@ var httpClient httprequest.Client
 func getCroppingRectangleForAspectRatio(size imageSize, newAspectRatio float64) image.Rectangle {
 	aspectRatio := float64(size.Width) / float64(size.Height)
 
-	width := size.Width
-	height := size.Height
+	startX := 0
+	startY := 0
+	endX := size.Width
+	endY := size.Height
 
 	if aspectRatio < newAspectRatio {
-		fmt.Println("original is lower")
-		height = int(float64(size.Width) * newAspectRatio)
-	} else {
-		fmt.Println("original is higher")
-		width = int(float64(size.Height) * newAspectRatio)
+		height := int(float64(size.Width)/newAspectRatio + 0.5)
+		startY = (size.Height - height) / 2
+		endY = startY + height
+	} else if aspectRatio > newAspectRatio {
+		width := int(float64(size.Height)*newAspectRatio + 0.5)
+		startX = (size.Width - width) / 2
+		endX = startX + width
 	}
-	fmt.Println("height", height)
-	fmt.Println("width", width)
 
-	croppingRectangle := image.Rect(0, 0, width, height)
+	croppingRectangle := image.Rect(startX, startY, endX, endY)
 
 	return croppingRectangle
 }
@@ -135,6 +136,7 @@ func resizeAndCropImage(imageData []byte, size imageSize) (resizedImage []byte, 
 	originalSize := imageSize{Width: boundsSize.X, Height: boundsSize.Y}
 
 	resizedAspectRatio := float64(size.Width) / float64(size.Height)
+
 	croppedImage := transform.Crop(originalImage, getCroppingRectangleForAspectRatio(originalSize, resizedAspectRatio))
 	result := transform.Resize(croppedImage, size.Width, size.Height, transform.MitchellNetravali)
 
@@ -202,8 +204,8 @@ func getImageSizes() imageSizes {
 			imageSize{Name: "1080p", Width: 1920, Height: 1080},
 			imageSize{Name: "tablet-landscape", Width: 1024, Height: 768},
 			imageSize{Name: "tablet-portrait", Width: 768, Height: 1024},
-			imageSize{Name: "phone-landscape", Width: 360, Height: 640},
-			imageSize{Name: "phone-portrait", Width: 640, Height: 360},
+			imageSize{Name: "phone-landscape", Width: 640, Height: 360},
+			imageSize{Name: "phone-portrait", Width: 360, Height: 640},
 		},
 	}
 }
@@ -231,6 +233,28 @@ func sendImage(context echo.Context) error {
 	return context.Blob(http.StatusOK, "image/jpeg", image)
 }
 
+func resizeLargestWorker(jobs <-chan string, sizes imageSizes) {
+	largest := sizes.Largest()
+
+	for url := range jobs {
+		getImage(url, largest, sizes)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func preCacheLargestImages(imageURLs []string) {
+	sizes := getImageSizes()
+	jobs := make(chan string, len(imageURLs))
+
+	go resizeLargestWorker(jobs, sizes)
+
+	for _, url := range imageURLs {
+		jobs <- url
+	}
+
+	close(jobs)
+}
+
 func main() {
 	service := echo.New()
 	service.Use(middleware.Gzip())
@@ -248,15 +272,16 @@ func main() {
 		panic(err)
 	}
 
-	imageCache, err = lru.NewARC(20)
+	imageCache, err = lru.NewARC(50 * len(getImageSizes().Sizes))
 	if err != nil {
 		panic(err)
 	}
 
+	allowedImageExtensions := regexp.MustCompile("(?i)\\.(je?pg|png)$")
+
 	go func() {
 		for {
 			var newImageURLs []string
-
 			wikimediaReponse := wikimediaSearchResponse{}
 			wikimediaError := jsonHTTPClient.Get(wikimediaSearchURL, &wikimediaReponse)
 			if wikimediaError != nil {
@@ -281,13 +306,18 @@ func main() {
 						continue
 					}
 
-					newImageURLs = append(newImageURLs, matches[1])
+					imageURL := matches[1]
+					if allowedImageExtensions.Match([]byte(imageURL)) {
+						newImageURLs = append(newImageURLs, imageURL)
+					}
 				}
 			}
 
 			imageURLs = newImageURLs
 
-			time.Sleep(60 * time.Second)
+			preCacheLargestImages(imageURLs)
+
+			time.Sleep(24 * time.Hour)
 		}
 	}()
 
