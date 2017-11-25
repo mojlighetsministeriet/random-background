@@ -22,8 +22,8 @@ import (
 	"github.com/mojlighetsministeriet/utils/httprequest"
 )
 
-const wikimediaSearchURL = "https://en.wikipedia.org/w/api.php?action=query&titles=Landscape&prop=images&imlimit=50&format=json"
-const wikimediaFileRootURL = "https://commons.wikimedia.org/wiki/"
+const instagramTagPageURL = "https://www.instagram.com/explore/tags/landskap/"
+const instagramDataRegexp = "window\\._sharedData\\s*=\\s*([^;]+)"
 
 type imageSize struct {
 	Name   string
@@ -81,21 +81,30 @@ func (sizes *imageSizes) Largest() (largest imageSize) {
 	return
 }
 
-type wikimediaSearchResponse struct {
-	Query wikimediaSearchResponseQuery `json:"query"`
+type instagramResponse struct {
+	EntryData instagramEntryData `json:"entry_data"`
 }
 
-type wikimediaSearchResponseQuery struct {
-	Pages map[string]wikimediaSearchResponsePage `json:"pages"`
+type instagramEntryData struct {
+	TagPage []instagramTagPage `json:"TagPage"`
 }
 
-type wikimediaSearchResponsePage struct {
-	Images []wikimediaSearchResponseImage `json:"images"`
+type instagramTagPage struct {
+	Tag instagramTag `json:"tag"`
 }
 
-type wikimediaSearchResponseImage struct {
-	NS    int    `json:"ns"`
-	Title string `json:"title"`
+type instagramTag struct {
+	TopPosts instagramTopPosts `json:"top_posts"`
+}
+
+type instagramTopPosts struct {
+	Nodes []instagramNode `json:"nodes"`
+}
+
+type instagramNode struct {
+	ID         string `json:"id"`
+	IsVideo    bool   `json:"is_video"`
+	DisplaySrc string `json:"display_src"`
 }
 
 var imageURLs []string
