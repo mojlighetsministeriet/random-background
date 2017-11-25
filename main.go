@@ -187,9 +187,7 @@ func getOriginalImage(url string, cache *lru.ARCCache) (imageResult []byte, err 
 		return
 	}
 
-	buffer := new(bytes.Buffer)
-	buffer.ReadFrom(originalImageData)
-	originalImage, toImageError := bytesToImage(buffer.Bytes())
+	originalImage, toImageError := bytesToImage(originalImageData)
 	if toImageError != nil {
 		err = toImageError
 		return
@@ -197,7 +195,7 @@ func getOriginalImage(url string, cache *lru.ARCCache) (imageResult []byte, err 
 
 	originalImage = blur.Gaussian(originalImage, 30)
 
-	buffer = new(bytes.Buffer)
+	buffer := new(bytes.Buffer)
 	writer := bufio.NewWriter(buffer)
 	err = imgio.JPEGEncoder(100)(writer, originalImage)
 	if err != nil {
@@ -317,9 +315,7 @@ func main() {
 				continue
 			}
 
-			buffer := new(bytes.Buffer)
-			buffer.ReadFrom(response)
-			matches := instagramDataPattern.FindStringSubmatch(buffer.String())
+			matches := instagramDataPattern.FindStringSubmatch(string(response))
 			if matches == nil {
 				service.Logger.Error(errors.New("Unable to find data for images from tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
 				continue
