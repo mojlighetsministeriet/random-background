@@ -238,11 +238,8 @@ func getImage(url string, size imageSize, cache *lru.ARCCache) (imageResult []by
 func getImageSizes() imageSizes {
 	return imageSizes{
 		Sizes: []imageSize{
-			imageSize{Name: "1080p", Width: 1920, Height: 1080},
-			imageSize{Name: "tablet-landscape", Width: 1024, Height: 768},
-			imageSize{Name: "tablet-portrait", Width: 768, Height: 1024},
-			imageSize{Name: "phone-landscape", Width: 640, Height: 360},
-			imageSize{Name: "phone-portrait", Width: 360, Height: 640},
+			imageSize{Name: "small", Width: 640, Height: 640},
+			imageSize{Name: "large", Width: 1024, Height: 1024},
 		},
 	}
 }
