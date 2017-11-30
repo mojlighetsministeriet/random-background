@@ -193,7 +193,7 @@ func getOriginalImage(url string, cache *lru.ARCCache) (imageResult []byte, err 
 		return
 	}
 
-	originalImage = blur.Gaussian(originalImage, 30)
+	originalImage = blur.Gaussian(originalImage, 10)
 
 	buffer := new(bytes.Buffer)
 	writer := bufio.NewWriter(buffer)
@@ -236,8 +236,8 @@ func getImage(url string, size imageSize, cache *lru.ARCCache) (imageResult []by
 func getImageSizes() imageSizes {
 	return imageSizes{
 		Sizes: []imageSize{
-			imageSize{Name: "small", Width: 640, Height: 640},
-			imageSize{Name: "large", Width: 1024, Height: 1024},
+			imageSize{Name: "small", Width: 320, Height: 320},
+			imageSize{Name: "large", Width: 512, Height: 512},
 		},
 	}
 }
