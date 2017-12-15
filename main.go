@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthonynsimon/bild/blur"
 	"github.com/anthonynsimon/bild/imgio"
 	"github.com/anthonynsimon/bild/transform"
 	lru "github.com/hashicorp/golang-lru"
@@ -192,7 +193,7 @@ func getOriginalImage(url string, cache *lru.ARCCache) (imageResult []byte, err 
 		return
 	}
 
-	//originalImage = blur.Gaussian(originalImage, 10)
+	originalImage = blur.Gaussian(originalImage, 10)
 
 	buffer := new(bytes.Buffer)
 	writer := bufio.NewWriter(buffer)
@@ -235,8 +236,8 @@ func getImage(url string, size imageSize, cache *lru.ARCCache) (imageResult []by
 func getImageSizes() imageSizes {
 	return imageSizes{
 		Sizes: []imageSize{
-			imageSize{Name: "small", Width: 320 / 2, Height: 320 / 2},
-			imageSize{Name: "large", Width: 512 / 2, Height: 512 / 2},
+			imageSize{Name: "small.jpg", Width: 320, Height: 320},
+			imageSize{Name: "large.jpg", Width: 512, Height: 512},
 		},
 	}
 }
@@ -346,7 +347,7 @@ func main() {
 
 	service.GET("/", func(context echo.Context) error {
 		sizes := getImageSizes()
-		return context.Redirect(http.StatusPermanentRedirect, sizes.Largest().Name)
+		return context.Redirect(http.StatusPermanentRedirect, sizes.Largest().Name+".jpg")
 	})
 
 	service.GET("/:size", sendImage)
