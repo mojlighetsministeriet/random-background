@@ -8,6 +8,7 @@ import (
 	"image"
 	"math/rand"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,10 +19,9 @@ import (
 	"github.com/anthonynsimon/bild/transform"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/labstack/echo"
-	"github.com/labstack/echo/middleware"
-	"github.com/labstack/gommon/log"
 	"github.com/mojlighetsministeriet/utils"
 	"github.com/mojlighetsministeriet/utils/httprequest"
+	"github.com/mojlighetsministeriet/utils/server"
 )
 
 const imageQuality = 85
@@ -93,21 +93,29 @@ type instagramEntryData struct {
 }
 
 type instagramTagPage struct {
-	Tag instagramTag `json:"tag"`
+	GraphQL instagramGraphQL `json:"graphql"`
 }
 
-type instagramTag struct {
-	TopPosts instagramTopPosts `json:"top_posts"`
+type instagramGraphQL struct {
+	HashTag instagramHashTag `json:"hashtag"`
 }
 
-type instagramTopPosts struct {
-	Nodes []instagramNode `json:"nodes"`
+type instagramHashTag struct {
+	EdgeTopPosts instagramEdgeTopPosts `json:"edge_hashtag_to_top_posts"`
+}
+
+type instagramEdgeTopPosts struct {
+	Edges []instagramEdge `json:"edges"`
+}
+
+type instagramEdge struct {
+	Node instagramNode `json:"node"`
 }
 
 type instagramNode struct {
 	ID         string `json:"id"`
 	IsVideo    bool   `json:"is_video"`
-	DisplaySrc string `json:"display_src"`
+	DisplayURL string `json:"display_url"`
 }
 
 var imageURLs []string
@@ -288,9 +296,13 @@ func preCacheLargestImages(imageURLs []string) {
 }
 
 func main() {
-	service := echo.New()
-	service.Use(middleware.Gzip())
-	service.Logger.SetLevel(log.INFO)
+	useTLS := true
+	if os.Getenv("TLS") == "disable" {
+		useTLS = false
+	}
+	bodyLimit := utils.GetEnv("BODY_LIMIT", "5M")
+
+	server := server.NewServer(useTLS, false, bodyLimit)
 
 	httpClient, err := httprequest.NewClient()
 	if err != nil {
@@ -311,28 +323,28 @@ func main() {
 
 			response, fetchError := httpClient.Get(instagramTagPageURL)
 			if fetchError != nil {
-				service.Logger.Error(fetchError)
+				server.Logger.Error(fetchError)
 				continue
 			}
 
 			matches := instagramDataPattern.FindStringSubmatch(string(response))
 			if matches == nil {
-				service.Logger.Error(errors.New("Unable to find data for images from tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
+				server.Logger.Error(errors.New("Unable to find data for images from tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
 				continue
 			}
 
 			instagramData := instagramTagPageData{}
 			insagramDataError := json.Unmarshal([]byte(matches[1]), &instagramData)
 			if insagramDataError != nil {
-				service.Logger.Error(errors.New("Unable to parse data from instagram tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
-				service.Logger.Error(insagramDataError)
+				server.Logger.Error(errors.New("Unable to parse data from instagram tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
+				server.Logger.Error(insagramDataError)
 				continue
 			}
 
 			for _, page := range instagramData.EntryData.TagPage {
-				for _, node := range page.Tag.TopPosts.Nodes {
-					if node.IsVideo == false && allowedImageExtensions.Match([]byte(node.DisplaySrc)) {
-						newImageURLs = append(newImageURLs, node.DisplaySrc)
+				for _, edge := range page.GraphQL.HashTag.EdgeTopPosts.Edges {
+					if edge.Node.IsVideo == false && allowedImageExtensions.Match([]byte(edge.Node.DisplayURL)) {
+						newImageURLs = append(newImageURLs, edge.Node.DisplayURL)
 					}
 				}
 			}
@@ -345,12 +357,12 @@ func main() {
 		}
 	}()
 
-	service.GET("/", func(context echo.Context) error {
+	server.GET("/", func(context echo.Context) error {
 		sizes := getImageSizes()
-		return context.Redirect(http.StatusPermanentRedirect, sizes.Largest().Name+".jpg")
+		return context.Redirect(http.StatusPermanentRedirect, sizes.Largest().Name)
 	})
 
-	service.GET("/:size", sendImage)
+	server.GET("/:size", sendImage)
 
-	service.Logger.Fatal(service.Start(":" + utils.GetEnv("PORT", "80")))
+	server.Listen(":" + utils.GetEnv("PORT", "443"))
 }
