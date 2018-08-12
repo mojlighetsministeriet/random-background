@@ -359,7 +359,10 @@ func main() {
 
 	server.GET("/", func(context echo.Context) error {
 		sizes := getImageSizes()
-		return context.Redirect(http.StatusPermanentRedirect, sizes.Largest().Name)
+		return context.Redirect(
+			http.StatusPermanentRedirect,
+			context.Request().Header.Get("X-Original-URI")+"/"+sizes.Largest().Name,
+		)
 	})
 
 	server.GET("/:size", sendImage)
