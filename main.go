@@ -26,7 +26,7 @@ import (
 
 const imageQuality = 85
 const instagramTagPageURL = "https://www.instagram.com/explore/tags/landskap/"
-const instagramDataRegexp = "window\\._sharedData\\s*=\\s*([^;]+)"
+const instagramDataRegexp = "window\\._sharedData\\s*=\\s*(.+?);</script>"
 
 type imageSize struct {
 	Name   string
@@ -323,13 +323,16 @@ func main() {
 
 			response, fetchError := httpClient.Get(instagramTagPageURL)
 			if fetchError != nil {
+				server.Logger.Error("Failed to fetch the image listing page at " + instagramTagPageURL)
 				server.Logger.Error(fetchError)
+				time.Sleep(time.Second * 10)
 				continue
 			}
 
 			matches := instagramDataPattern.FindStringSubmatch(string(response))
 			if matches == nil {
 				server.Logger.Error(errors.New("Unable to find data for images from tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
+				time.Sleep(time.Second * 10)
 				continue
 			}
 
@@ -338,6 +341,7 @@ func main() {
 			if insagramDataError != nil {
 				server.Logger.Error(errors.New("Unable to parse data from instagram tag page " + instagramTagPageURL + ", has instagram changed their HTML structure?"))
 				server.Logger.Error(insagramDataError)
+				time.Sleep(time.Second * 10)
 				continue
 			}
 
